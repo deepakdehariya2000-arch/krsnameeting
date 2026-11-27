@@ -1,0 +1,182 @@
+<!doctype html>
+<html lang="hi">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>Apni Meeting</title>
+  <style>
+    * { box-sizing: border-box; }
+    body {
+      margin: 0; font: 16px system-ui, sans-serif;
+      color: #17202a; background: #f3f6fa;
+    }
+    header {
+      padding: 18px 24px; background: #173b67; color: white;
+      font-size: 20px; font-weight: 700;
+    }
+    main { max-width: 1050px; margin: 28px auto; padding: 0 16px; }
+    .card {
+      background: white; padding: 20px; border-radius: 14px;
+      box-shadow: 0 4px 18px #15223812; margin-bottom: 18px;
+    }
+    .row { display: flex; gap: 10px; flex-wrap: wrap; }
+    input, button {
+      font: inherit; padding: 11px 13px; border-radius: 8px;
+    }
+    input { border: 1px solid #bbc7d5; flex: 1; min-width: 180px; }
+    button {
+      border: 0; background: #1769d2; color: white;
+      cursor: pointer; font-weight: 600;
+    }
+    button.secondary { background: #e7eef7; color: #173b67; }
+    #meet { width: 100%; height: 70vh; min-height: 480px; }
+    #status { color: #4b5968; margin-top: 10px; }
+    .small { color: #586574; font-size: 14px; line-height: 1.5; }
+    @media (max-width: 600px) { #meet { height: 65vh; min-height: 400px; } }
+  </style>
+</head>
+<body>
+  <header>Apni Meeting</header>
+  <main>
+    <section class="card">
+      <h2>Meeting shuru karein ya join karein</h2>
+      <div class="row">
+        <input id="name" placeholder="Aapka naam" maxlength="60">
+        <input id="room" placeholder="Meeting code (khali chhodein to naya banega)">
+        <button id="join">Meeting join karein</button>
+      </div>
+      <p id="status">Nayi meeting ke liye code khali chhodein.</p>
+      <div class="row">
+        <button class="secondary" id="copy" hidden>Invite link copy karein</button>
+      </div>
+    </section>
+
+    <section class="card">
+      <h3>Meeting schedule karein</h3>
+      <div class="row">
+        <input id="title" placeholder="Meeting ka naam">
+        <input id="when" type="datetime-local">
+        <button class="secondary" id="calendar">Calendar file banayein</button>
+      </div>
+      <p class="small">Calendar file mein is meeting ka join link shamil hoga.</p>
+    </section>
+
+    <section class="card" id="meetingCard" hidden>
+      <div id="meet"></div>
+    </section>
+
+    <p class="small">
+      Note: Yeh demo public Jitsi server se connect hota hai. Confidential ya
+      production meetings ke liye apna authenticated server/managed deployment use karein.
+    </p>
+  </main>
+
+  <script>
+    const $ = (id) => document.getElementById(id);
+    let meetingUrl = "";
+    let api = null;
+
+    function makeRoom() {
+      // Random room name guess karna mushkil banata hai, lekin access control nahi hai.
+      return "meeting-" + crypto.randomUUID().replaceAll("-", "").slice(0, 20);
+    }
+
+    function getRoomFromUrl() {
+      return new URLSearchParams(location.search).get("room");
+    }
+
+    async function loadJitsiApi() {
+      if (window.JitsiMeetExternalAPI) return;
+      await new Promise((resolve, reject) => {
+        const script = document.createElement("script");
+        script.src = "https://meet.jit.si/external_api.js";
+        script.onload = resolve;
+        script.onerror = () => reject(new Error("Meeting service load nahi hui."));
+        document.head.appendChild(script);
+      });
+    }
+
+    async function joinMeeting() {
+      const name = $("name").value.trim() || "Guest";
+      const room = $("room").value.trim() || getRoomFromUrl() || makeRoom();
+      $("room").value = room;
+      meetingUrl = location.origin + location.pathname + "?room=" + encodeURIComponent(room);
+      $("status").textContent = "Meeting connect ho rahi hai…";
+
+      try {
+        await loadJitsiApi();
+        if (api) api.dispose();
+
+        $("meetingCard").hidden = false;
+        api = new JitsiMeetExternalAPI("meet.jit.si", {
+          roomName: room,
+          parentNode: $("meet"),
+          width: "100%",
+          height: "100%",
+          userInfo: { displayName: name },
+          configOverwrite: { prejoinPageEnabled: true },
+          interfaceConfigOverwrite: {
+            TOOLBAR_BUTTONS: [
+              "microphone", "camera", "desktop", "chat", "raisehand",
+              "tileview", "participants-pane", "hangup"
+            ]
+          }
+        });
+
+        $("copy").hidden = false;
+        $("status").textContent = "Meeting code: " + room;
+        history.replaceState({}, "", meetingUrl);
+        $("copy").onclick = async () => {
+          await navigator.clipboard.writeText(meetingUrl);
+          $("status").textContent = "Invite link copy ho gaya: " + meetingUrl;
+        };
+        $("meetingCard").scrollIntoView({ behavior: "smooth" });
+      } catch (error) {
+        $("status").textContent = error.message || "Meeting start nahi ho saki.";
+      }
+    }
+
+    $("join").addEventListener("click", joinMeeting);
+
+    $("calendar").addEventListener("click", () => {
+      const room = $("room").value.trim() || getRoomFromUrl() || makeRoom();
+      $("room").value = room;
+      meetingUrl = location.origin + location.pathname + "?room=" + encodeURIComponent(room);
+
+      const title = $("title").value.trim() || "Online meeting";
+      const dateValue = $("when").value;
+      if (!dateValue) {
+        $("status").textContent = "Calendar file ke liye date aur time chuniye.";
+        return;
+      }
+
+      const start = new Date(dateValue);
+      const end = new Date(start.getTime() + 60 * 60 * 1000);
+      const toICS = (d) => d.toISOString().replace(/[-:]/g, "").replace(/\.\d{3}/, "");
+      const escapeICS = (s) => s.replace(/\\/g, "\\\\").replace(/,/g, "\\,")
+        .replace(/;/g, "\\;").replace(/\n/g, "\\n");
+
+      const ics = [
+        "BEGIN:VCALENDAR", "VERSION:2.0", "PRODID:-//Apni Meeting//EN",
+        "BEGIN:VEVENT", "UID:" + crypto.randomUUID(),
+        "DTSTAMP:" + toICS(new Date()),
+        "DTSTART:" + toICS(start), "DTEND:" + toICS(end),
+        "SUMMARY:" + escapeICS(title),
+        "DESCRIPTION:" + escapeICS("Join meeting: " + meetingUrl),
+        "URL:" + meetingUrl, "END:VEVENT", "END:VCALENDAR"
+      ].join("\r\n");
+
+      const blob = new Blob([ics], { type: "text/calendar;charset=utf-8" });
+      const a = document.createElement("a");
+      a.href = URL.createObjectURL(blob);
+      a.download = "meeting.ics";
+      a.click();
+      URL.revokeObjectURL(a.href);
+      $("status").textContent = "Calendar file download ho gayi. Invite link: " + meetingUrl;
+    });
+
+    // Link mein room code ho to us room ko pehle se fill kar de.
+    if (getRoomFromUrl()) $("room").value = getRoomFromUrl();
+  </script>
+</body>
+</html>
